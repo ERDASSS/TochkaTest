@@ -16,7 +16,16 @@ class HotelCapacity
             timeline.Add((guest.CheckOut, ActionType.CheckOut));
         }
         
-        timeline.Sort((a, b) => String.Compare(a.date, b.date, StringComparison.Ordinal));
+        timeline.Sort((a, b) =>
+        {
+            var dateCompare = string.Compare(a.date, b.date, StringComparison.Ordinal);
+            
+            if (dateCompare != 0)
+                return dateCompare;
+            
+            return a.action == b.action ? 0 : (a.action == ActionType.CheckOut ? -1 : 1);
+        });
+        
         foreach (var time in timeline)
         {
             if (time.action == ActionType.CheckIn)
