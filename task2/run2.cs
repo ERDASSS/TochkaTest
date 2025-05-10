@@ -10,7 +10,9 @@ class Program
     static readonly char[] doors_char = keys_char.Select(char.ToUpper).ToArray();
 
     private static readonly (int dx, int dy)[] directions = new (int dx, int dy)[] { (0, 1), (0, -1), (1, 0), (-1, 0) };
-
+    static Dictionary<(int x,int y,int keysMask), List<(char key,int steps,int x,int y)>> reachCache
+        = new Dictionary<(int,int,int), List<(char,int,int,int)>>();
+    
     // Метод для чтения входных данных
     static List<List<char>> GetInput()
     {
@@ -198,6 +200,7 @@ class Program
 
     static int Solve(List<List<char>> data)
     {
+        reachCache.Clear();
         var height = data.Count;
         var width = data[0].Count;
 
@@ -265,6 +268,10 @@ class Program
     private static List<(char key, int steps, int x, int y)> FindReachableKeys((int x, int y) start,
         int keysMask, List<List<char>> data)
     {
+        var cacheKey = (start.x, start.y, keysMask);
+        if (reachCache.TryGetValue(cacheKey, out var cached))
+            return cached;
+        
         var height = data.Count;
         var width = data[0].Count;
         var visited = new bool[height, width];
@@ -274,14 +281,10 @@ class Program
         queue.Enqueue((start.x, start.y, 0));
 
         var result = new List<(char, int, int, int)>();
-        //var minDistFound = int.MaxValue;
 
         while (queue.Count > 0)
         {
             var (cx, cy, cdist) = queue.Dequeue();
-
-            // if (cdist > minDistFound)
-            //     break;
 
             foreach (var (dx, dy) in directions)
             {
@@ -311,35 +314,21 @@ class Program
                 var newDist = cdist + 1;
 
                 if (cell >= 'a' && cell <= 'z' && (keysMask & (1 << (cell - 'a'))) == 0)
-                {
-                    // if (newDist <= minDistFound)
-                    // {
-                    //     minDistFound = newDist;
-                    //     result.Add((cell, newDist, nx, ny));
-                    // }
-                    //
-                    // continue;
-                    
                     result.Add((cell, newDist, nx, ny));
-                }
-
-                // if (newDist < minDistFound)
-                //     queue.Enqueue((nx, ny, newDist));
+                
                 queue.Enqueue((nx, ny, newDist));
             }
         }
 
+        reachCache[cacheKey] = result;
         return result;
     }
 
     static void Main()
     {
-        
         var data = GetInput();
-        var stopwatch = Stopwatch.StartNew();
         
         int result = Solve(data);
-        stopwatch.Stop();
         if (result == -1)
         {
             Console.WriteLine("No solution found");
@@ -348,6 +337,5 @@ class Program
         {
             Console.WriteLine(result);
         }
-        Console.WriteLine($"Execution time: {stopwatch.Elapsed}");
     }
 }
