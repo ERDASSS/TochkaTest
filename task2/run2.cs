@@ -2,20 +2,14 @@
 using System.Collections.Generic;
 using System.Linq;
 
-
 class Program
 {
     // Константы для символов ключей и дверей
     static readonly char[] keys_char = Enumerable.Range('a', 26).Select(i => (char)i).ToArray();
     static readonly char[] doors_char = keys_char.Select(char.ToUpper).ToArray();
-    private static readonly (int dx, int dy)[] directions = new (int, int)[]
-    {
-        (0,  1), (0, -1), (1,  0), (-1,  0)  
-    };
-    private static readonly HashSet<char> takenKeys = new HashSet<char>();
-    private static HashSet<char> keysOnMap = new HashSet<char>();
-    private static readonly HashSet<char> keysCharHashSet = keys_char.ToHashSet();
-    
+
+    private static readonly (int dx, int dy)[] directions = new (int dx, int dy)[] { (0, 1), (0, -1), (1, 0), (-1, 0) };
+
     // Метод для чтения входных данных
     static List<List<char>> GetInput()
     {
@@ -25,101 +19,156 @@ class Program
         {
             data.Add(line.ToCharArray().ToList());
         }
+
         return data;
     }
 
+    struct State
+    {
+        public (int x, int y)[] Robots;
+        public HashSet<char> CollectedKeys;
+    }
 
     static int Solve(List<List<char>> data)
     {
-        var steps = 0;
-        var robotsPosition = new List<(int x, int y)>();
-        
-        for (var i = 0; i < data.Count; i++)
-        {
-            for (var j = 0; j < data[i].Count; j++)
-            {
-                if (data[i][j].Equals('@'))
-                    robotsPosition.Add((j, i));
+        var height = data.Count;
+        var width = data[0].Count;
 
-                if (keysCharHashSet.Contains(data[i][j]))
-                    keysOnMap.Add(data[i][j]);
+        var startPositions = new List<(int x, int y)>();
+        var allKeys = new HashSet<char>();
+
+        for (int y = 0; y < height; y++)
+        {
+            for (int x = 0; x < width; x++)
+            {
+                var ch = data[y][x];
+
+                if (ch == '@')
+                    startPositions.Add((x, y));
+                else if (ch >= 'a' && ch <= 'z')
+                    allKeys.Add(ch);
             }
         }
 
-        while (takenKeys.Count != keysOnMap.Count)
+        var distanceMap = new Dictionary<State, int>();
+        var pq = new PriorityQueue<State, int>();
+
+        var initState = new State { Robots = startPositions.ToArray(), CollectedKeys = new HashSet<char>() };
+
+        distanceMap[initState] = 0;
+        pq.Enqueue(initState, 0);
+
+        var counter = 0;
+        while (pq.Count > 0)
         {
-            var minSteps = int.MaxValue;
-            var robotIndex = 0;
-            var nextRobotsPosition = (0, 0);
-            var takenKey = '\0';
-                
-            for (var i = 0; i < robotsPosition.Count; i++)
+            Console.WriteLine(counter++);
+            pq.TryDequeue(out var state, out int dist);
+
+            if (dist != distanceMap[state])
+                continue;
+
+            if (state.CollectedKeys.Count == allKeys.Count)
+                return dist;
+
+            for (int i = 0; i < state.Robots.Length; i++)
             {
-                var nextPosition = BFS(robotsPosition[i], data);
-                if (nextPosition != null && nextPosition.Value.steps < minSteps)
+                var pos = state.Robots[i];
+                var reachable = FindReachableKeys(pos, state.CollectedKeys, data);
+                foreach (var (key, steps, kx, ky) in reachable)
                 {
-                    minSteps = nextPosition.Value.steps;
-                    robotIndex = i;
-                    nextRobotsPosition = (nextPosition.Value.x, nextPosition.Value.y);
-                    takenKey = nextPosition.Value.takenKey;
+                    var nextKeys = new HashSet<char>(state.CollectedKeys) { key };
+                    var nextRobots = state.Robots.ToArray();
+
+                    nextRobots[i] = (kx, ky);
+
+                    var nextState = new State { Robots = nextRobots, CollectedKeys = nextKeys };
+
+                    var newDist = dist + steps;
+
+                    if (!distanceMap.TryGetValue(nextState, out var oldDist) || newDist < oldDist)
+                    {
+                        distanceMap[nextState] = newDist;
+                        pq.Enqueue(nextState, newDist);
+                    }
                 }
             }
-
-            if (minSteps != int.MaxValue)
-            {
-                robotsPosition[robotIndex] = nextRobotsPosition;
-                takenKeys.Add(takenKey);
-                steps+=minSteps;
-            }
-            else
-                return -1;
         }
-        
-        return steps;
+
+        return -1;
     }
 
-    private static (int x, int y, int steps, char takenKey)? BFS((int xStart, int yStart) start, List<List<char>> data)
+    private static List<(char key, int steps, int x, int y)> FindReachableKeys((int x, int y) start,
+        HashSet<char> collectedKeys, List<List<char>> data)
     {
-        var visited = new HashSet<(int x, int y)>();
+        var height = data.Count;
+        var width = data[0].Count;
+        var visited = new bool[height, width];
         var queue = new Queue<(int x, int y, int dist)>();
-        
-        visited.Add((start.xStart, start.yStart));
-        queue.Enqueue((start.xStart, start.yStart, 0));
+
+        visited[start.y, start.x] = true;
+        queue.Enqueue((start.x, start.y, 0));
+
+        var result = new List<(char, int, int, int)>();
+        var minDistFound = int.MaxValue;
 
         while (queue.Count > 0)
         {
-            var pair = queue.Dequeue();
-            // Console.WriteLine($"Visited: {u}");
+            var (cx, cy, cdist) = queue.Dequeue();
+
+            if (cdist > minDistFound)
+                break;
 
             foreach (var (dx, dy) in directions)
             {
-                var newState = (x: pair.x + dx, y: pair.y + dy, dist: pair.dist + 1);
-                
-                if (newState.x < 0 || newState.y < 0 || newState.y >= data.Count || newState.x >= data[0].Count)
+                var nx = cx + dx;
+                var ny = cy + dy;
+
+                if (nx < 0 || ny < 0 || nx >= width || ny >= height)
                     continue;
-                
-                if (keysCharHashSet.Contains(data[newState.y][newState.x]) && !takenKeys.Contains(data[newState.y][newState.x]))
+
+                if (visited[ny, nx])
+                    continue;
+
+                var cell = data[ny][nx];
+
+                if (cell == '#')
+                    continue;
+
+                if (cell >= 'A' && cell <= 'Z')
                 {
-                    return (newState.x, newState.y, newState.dist, data[newState.y][newState.x]);
+                    var neededKey = char.ToLower(cell);
+
+                    if (!collectedKeys.Contains(neededKey))
+                        continue;
                 }
-                
-                if (!visited.Contains((newState.x, newState.y)) && (data[newState.y][newState.x] == '.' ||
-                                                                    takenKeys.Contains(char.ToLower(data[newState.y][newState.x]))))
+
+                visited[ny, nx] = true;
+                var newDist = cdist + 1;
+
+                if (cell >= 'a' && cell <= 'z' && !collectedKeys.Contains(cell))
                 {
-                    visited.Add((newState.x, newState.y));
-                    queue.Enqueue(newState);
+                    if (newDist <= minDistFound)
+                    {
+                        minDistFound = newDist;
+                        result.Add((cell, newDist, nx, ny));
+                    }
+
+                    continue;
                 }
+
+                if (newDist < minDistFound)
+                    queue.Enqueue((nx, ny, newDist));
             }
         }
 
-        return null;
+        return result;
     }
-    
+
     static void Main()
     {
         var data = GetInput();
         int result = Solve(data);
-        
+
         if (result == -1)
         {
             Console.WriteLine("No solution found");
