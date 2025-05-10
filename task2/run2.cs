@@ -1,5 +1,6 @@
 ﻿using System;
 using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 
 class Program
@@ -23,10 +24,176 @@ class Program
         return data;
     }
 
-    struct State
+    struct State : IEquatable<State>
     {
-        public (int x, int y)[] Robots;
-        public HashSet<char> CollectedKeys;
+        public (int x, int y)[] Robots; 
+        public int KeysMask;           
+
+        public bool Equals(State other)
+            => KeysMask == other.KeysMask
+               && Robots.SequenceEqual(other.Robots);
+
+        public override bool Equals(object obj)
+            => obj is State other && Equals(other);
+
+        public override int GetHashCode()
+        {
+            unchecked
+            {
+                int hash = KeysMask;
+                foreach (var (x, y) in Robots)
+                    hash = (hash * 397) ^ (x * 31 + y);
+                return hash;
+            }
+        }
+    }
+
+    // Чуть-чуть считерил и взял реализацию из нового .Net 
+    private class PriorityQueue<TElement, TPriority>
+    {
+        private readonly IComparer<TPriority>? _comparer;
+        private (TElement Element, TPriority Priority)[] _nodes;
+        private int _version;
+        private int _size;
+        private const int Log2Arity = 2;
+        private const int Arity = 4;
+        
+        public PriorityQueue()
+        {
+            _nodes = Array.Empty<(TElement, TPriority)>();
+            _comparer = InitializeComparer(null);
+        }
+        
+        private static IComparer<TPriority>? InitializeComparer(IComparer<TPriority>? comparer)
+        {
+            if (typeof(TPriority).IsValueType)
+            {
+                if (comparer == Comparer<TPriority>.Default)
+                    return null;
+                
+                return comparer;
+            }
+            else
+                return comparer ?? Comparer<TPriority>.Default;
+        }
+        
+        public int Count => _size;
+        
+        public void Enqueue(TElement element, TPriority priority)
+        {
+            int currentSize = _size;
+            _version++;
+
+            if (_nodes.Length == currentSize)
+            {
+                Grow(currentSize + 1);
+            }
+
+            _size = currentSize + 1;
+            
+            MoveUpDefaultComparer((element, priority), currentSize);
+        }
+        
+        public bool TryDequeue(out TElement element, out TPriority priority)
+        {
+            if (_size != 0)
+            {
+                (element, priority) = _nodes[0];
+                RemoveRootNode();
+                return true;
+            }
+
+            element = default;
+            priority = default;
+            return false;
+        }
+        
+        private void RemoveRootNode()
+        {
+            int lastNodeIndex = --_size;
+            _version++;
+
+            if (lastNodeIndex > 0)
+            {
+                (TElement Element, TPriority Priority) lastNode = _nodes[lastNodeIndex];
+                
+                MoveDownDefaultComparer(lastNode, 0);
+            }
+        }
+        
+        private void Grow(int minCapacity)
+        {
+            const int GrowFactor = 2;
+            const int MinimumGrow = 4;
+
+            int newcapacity = GrowFactor * _nodes.Length;
+            
+            if ((uint)newcapacity > Array.MaxLength)
+                newcapacity = Array.MaxLength;
+            
+            newcapacity = Math.Max(newcapacity, _nodes.Length + MinimumGrow);
+            
+            if (newcapacity < minCapacity)
+                newcapacity = minCapacity;
+
+            Array.Resize(ref _nodes, newcapacity);
+        }
+        
+        private void MoveUpDefaultComparer((TElement Element, TPriority Priority) node, int nodeIndex)
+        {
+            (TElement Element, TPriority Priority)[] nodes = _nodes;
+
+            while (nodeIndex > 0)
+            {
+                int parentIndex = GetParentIndex(nodeIndex);
+                (TElement Element, TPriority Priority) parent = nodes[parentIndex];
+
+                if (Comparer<TPriority>.Default.Compare(node.Priority, parent.Priority) < 0)
+                {
+                    nodes[nodeIndex] = parent;
+                    nodeIndex = parentIndex;
+                }
+                else
+                    break;
+            }
+
+            nodes[nodeIndex] = node;
+        }
+        
+        private void MoveDownDefaultComparer((TElement Element, TPriority Priority) node, int nodeIndex)
+        {
+            (TElement Element, TPriority Priority)[] nodes = _nodes;
+            int size = _size;
+
+            int i;
+            while ((i = GetFirstChildIndex(nodeIndex)) < size)
+            {
+                (TElement Element, TPriority Priority) minChild = nodes[i];
+                int minChildIndex = i;
+
+                int childIndexUpperBound = Math.Min(i + Arity, size);
+                while (++i < childIndexUpperBound)
+                {
+                    (TElement Element, TPriority Priority) nextChild = nodes[i];
+                    if (Comparer<TPriority>.Default.Compare(nextChild.Priority, minChild.Priority) < 0)
+                    {
+                        minChild = nextChild;
+                        minChildIndex = i;
+                    }
+                }
+                
+                if (Comparer<TPriority>.Default.Compare(node.Priority, minChild.Priority) <= 0)
+                    break;
+                
+                nodes[nodeIndex] = minChild;
+                nodeIndex = minChildIndex;
+            }
+
+            nodes[nodeIndex] = node;
+        }
+        
+        private static int GetParentIndex(int index) => (index - 1) >> Log2Arity;
+        private static int GetFirstChildIndex(int index) => (index << Log2Arity) + 1;
     }
 
     static int Solve(List<List<char>> data)
@@ -35,7 +202,7 @@ class Program
         var width = data[0].Count;
 
         var startPositions = new List<(int x, int y)>();
-        var allKeys = new HashSet<char>();
+        var allKeysMask = 0;
 
         for (int y = 0; y < height; y++)
         {
@@ -46,42 +213,40 @@ class Program
                 if (ch == '@')
                     startPositions.Add((x, y));
                 else if (ch >= 'a' && ch <= 'z')
-                    allKeys.Add(ch);
+                    allKeysMask |= 1 << (ch - 'a');
             }
         }
 
         var distanceMap = new Dictionary<State, int>();
         var pq = new PriorityQueue<State, int>();
 
-        var initState = new State { Robots = startPositions.ToArray(), CollectedKeys = new HashSet<char>() };
+        var initState = new State { Robots = startPositions.ToArray(), KeysMask = 0 };
 
         distanceMap[initState] = 0;
         pq.Enqueue(initState, 0);
-
-        var counter = 0;
+        
         while (pq.Count > 0)
         {
-            Console.WriteLine(counter++);
             pq.TryDequeue(out var state, out int dist);
 
             if (dist != distanceMap[state])
                 continue;
 
-            if (state.CollectedKeys.Count == allKeys.Count)
+            if (state.KeysMask == allKeysMask)
                 return dist;
 
             for (int i = 0; i < state.Robots.Length; i++)
             {
                 var pos = state.Robots[i];
-                var reachable = FindReachableKeys(pos, state.CollectedKeys, data);
+                var reachable = FindReachableKeys(pos, state.KeysMask, data);
                 foreach (var (key, steps, kx, ky) in reachable)
                 {
-                    var nextKeys = new HashSet<char>(state.CollectedKeys) { key };
+                    var newMask = state.KeysMask | (1 << (key - 'a'));
                     var nextRobots = state.Robots.ToArray();
 
                     nextRobots[i] = (kx, ky);
 
-                    var nextState = new State { Robots = nextRobots, CollectedKeys = nextKeys };
+                    var nextState = new State { Robots = nextRobots, KeysMask = newMask };
 
                     var newDist = dist + steps;
 
@@ -98,7 +263,7 @@ class Program
     }
 
     private static List<(char key, int steps, int x, int y)> FindReachableKeys((int x, int y) start,
-        HashSet<char> collectedKeys, List<List<char>> data)
+        int keysMask, List<List<char>> data)
     {
         var height = data.Count;
         var width = data[0].Count;
@@ -109,14 +274,14 @@ class Program
         queue.Enqueue((start.x, start.y, 0));
 
         var result = new List<(char, int, int, int)>();
-        var minDistFound = int.MaxValue;
+        //var minDistFound = int.MaxValue;
 
         while (queue.Count > 0)
         {
             var (cx, cy, cdist) = queue.Dequeue();
 
-            if (cdist > minDistFound)
-                break;
+            // if (cdist > minDistFound)
+            //     break;
 
             foreach (var (dx, dy) in directions)
             {
@@ -136,28 +301,31 @@ class Program
 
                 if (cell >= 'A' && cell <= 'Z')
                 {
-                    var neededKey = char.ToLower(cell);
-
-                    if (!collectedKeys.Contains(neededKey))
+                    var bit = 1 << (char.ToLower(cell) - 'a');
+                    
+                    if ((keysMask & bit) == 0) 
                         continue;
                 }
 
                 visited[ny, nx] = true;
                 var newDist = cdist + 1;
 
-                if (cell >= 'a' && cell <= 'z' && !collectedKeys.Contains(cell))
+                if (cell >= 'a' && cell <= 'z' && (keysMask & (1 << (cell - 'a'))) == 0)
                 {
-                    if (newDist <= minDistFound)
-                    {
-                        minDistFound = newDist;
-                        result.Add((cell, newDist, nx, ny));
-                    }
-
-                    continue;
+                    // if (newDist <= minDistFound)
+                    // {
+                    //     minDistFound = newDist;
+                    //     result.Add((cell, newDist, nx, ny));
+                    // }
+                    //
+                    // continue;
+                    
+                    result.Add((cell, newDist, nx, ny));
                 }
 
-                if (newDist < minDistFound)
-                    queue.Enqueue((nx, ny, newDist));
+                // if (newDist < minDistFound)
+                //     queue.Enqueue((nx, ny, newDist));
+                queue.Enqueue((nx, ny, newDist));
             }
         }
 
@@ -166,9 +334,12 @@ class Program
 
     static void Main()
     {
+        
         var data = GetInput();
+        var stopwatch = Stopwatch.StartNew();
+        
         int result = Solve(data);
-
+        stopwatch.Stop();
         if (result == -1)
         {
             Console.WriteLine("No solution found");
@@ -177,5 +348,6 @@ class Program
         {
             Console.WriteLine(result);
         }
+        Console.WriteLine($"Execution time: {stopwatch.Elapsed}");
     }
 }
